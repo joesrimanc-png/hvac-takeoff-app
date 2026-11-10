@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 DB_PATH = Path(__file__).resolve().parent.parent / "hvac_takeoff.db"
 
@@ -47,12 +47,29 @@ def initialize_db() -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pricing_library (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                description TEXT NOT NULL,
+                unit TEXT NOT NULL,
+                unit_cost REAL NOT NULL DEFAULT 0,
+                labor_rate REAL NOT NULL DEFAULT 0,
+                adjustment_factor REAL NOT NULL DEFAULT 1,
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
 
 def create_project(name: str, unit_system: str = "Imperial") -> int:
+    clean_name = (name or "New HVAC Estimate").strip() or "New HVAC Estimate"
     with get_connection() as conn:
         cursor = conn.execute(
             "INSERT INTO projects (name, unit_system) VALUES (?, ?)",
-            (name.strip() or "New HVAC Estimate", unit_system),
+            (clean_name, unit_system),
         )
         return int(cursor.lastrowid)
 
@@ -96,26 +113,24 @@ def add_item(
             (
                 project_id,
                 category,
-                description.strip() or "Unnamed item",
-                float(quantity),
-                unit.strip() or "EA",
-                float(unit_cost),
-                float(labor_rate),
-                float(adjustment_factor),
-                notes.strip(),
+                (description or "Unnamed item").strip() or "Unnamed item",
+                float(quantity or 0),
+                (unit or "EA").strip() or "EA",
+                float(unit_cost or 0),
+                float(labor_rate or 0),
+                float(adjustment_factor or 1.0),
+                notes or "",
             ),
         )
-        return int(cursor.lastrowid)
+    return int(cursor.lastrowid)
 
 
 def list_items(project_id: int) -> List[Dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT
-                id, project_id, category, description, quantity, unit,
-                unit_cost, labor_rate, adjustment_factor, notes,
-                created_at
+            SELECT id, project_id, category, description, quantity, unit,
+                   unit_cost, labor_rate, adjustment_factor, notes, created_at
             FROM line_items
             WHERE project_id = ?
             ORDER BY id ASC
@@ -136,3 +151,36 @@ def touch_project(project_id: int) -> None:
             "UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (project_id,),
         )
+
+
+def save_pricing_record(category: str, description: str, unit: str, unit_cost: float, labor_rate: float, adjustment_factor: float, notes: str) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO pricing_library (category, description, unit, unit_cost, labor_rate, adjustment_factor, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                category,
+                (description or "Pricing item").strip() or "Pricing item",
+                (unit or "EA").strip() or "EA",
+                float(unit_cost or 0),
+                float(labor_rate or 0),
+                float(adjustment_factor or 1.0),
+                notes or "",
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_pricing_records() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, category, description, unit, unit_cost, labor_rate, adjustment_factor, notes FROM pricing_library ORDER BY category, description"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def delete_pricing_record(item_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM pricing_library WHERE id = ?", (item_id,))
